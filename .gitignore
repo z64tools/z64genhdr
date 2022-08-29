@@ -1,0 +1,8 @@
+app_win32
+app_linux
+bin
+test/
+.log
+settings.mk
+check.sh
+compile_flags.txt
