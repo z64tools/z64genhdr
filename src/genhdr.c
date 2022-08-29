@@ -1,19 +1,70 @@
-#include <ext_lib.h>
+#include "genhdr.h"
 
 char* gIPath;
 char* gOPath;
 FILE* gF_SrcLD;
 FILE* gF_ObjLD;
+bool gVerbose;
 
-#define FOPEN(filename) ({ \
-		FILE* f = fopen(FileSys_File(filename), "w"); \
-		if (!f) printf_error("Could not fopen file [%s]", filename); \
-		f; \
-	})
+int main(s32 n, char** arg) {
+	u32 i;
+	
+	Log_NoOutput();
+	
+	if (ParseArgs(arg, "verbose", &i))
+		gVerbose = true;
+	
+	if (ParseArgs(arg, "i", &i)) {
+		gIPath = qFree(StrDupX(arg[i], 256));
+		
+		if (PathIsRel(gIPath))
+			strcpy(gIPath, PathAbs(gIPath));
+		
+		if (!StrEnd(gIPath, "/"))
+			strcat(gIPath, "/");
+		
+		printf_info("Input: %s", gIPath);
+	}
+	
+	if (ParseArgs(arg, "o", &i)) {
+		if (!arg[i])
+			printf_error("Provide path");
+		
+		gOPath = StrDupX(arg[i], 512);
+		
+		if (PathIsRel(gOPath))
+			strcpy(gOPath, PathAbs(gOPath));
+		
+		if (!StrEnd(gOPath, "/"))
+			strcat(gOPath, "/");
+		
+		printf_info("Output: %s", gOPath);
+		
+		GenHdr_OpenFiles();
+	} else
+		printf_error("Please provide output directory with --o");
+	
+	GenHdr_GenerateHeaders();
+	GenHdr_ParseZ64Map();
+}
 
 void GenHdr_OpenFiles(void) {
-	FileSys_Path(gOPath);
+	ItemList* list = New(ItemList);
 	
+	Sys_MakeDir(gOPath);
+	
+	ItemList_List(list, xFmt("%sinclude/", gIPath), -1, LIST_FILES);
+	
+	for (s32 i = 0; i < list->num; i++) {
+		char* input = list->item[i];
+		char* output = xFmt("%s%s", gOPath, StrStr(input, "include/"));
+		
+		MSG("Copy %s -> %s", input, output);
+		Sys_MakeDir(Path(output));
+		Sys_Copy(input, output);
+	}
+	
+	FileSys_Path(gOPath);
 	gF_SrcLD = FOPEN("symbol_src.ld");
 	gF_ObjLD = FOPEN("symbol_obj.ld");
 }
@@ -98,62 +149,6 @@ void GenHdr_ParseZ64Map(void) {
 	} while ((str = Line(str, 1)));
 }
 
-static void GenHdr_CFile(const char* file) {
-	MemFile* mem = New(MemFile);
-	MemFile* hdr = New(MemFile);
-	u32 brace = 0;
-	u32 equals = 0;
-	char* str;
-	
-	if (MemFile_LoadFile_String(mem, file))
-		printf_error("Could not load file [%s]");
-	MemFile_Alloc(hdr, mem->size);
-	
-	str = mem->str;
-	
-	while (*str != '\0') {
-		if (*str == '{')
-			brace++;
-		
-		if (!brace) {
-			if (*str == '=')
-				equals++;
-			if (equals && *str == ';')
-				equals--;
-			
-			if (!equals)
-				if (!MemFile_Write(hdr, str, 1))
-					printf_error("Ran out of space to write!");
-			
-		}
-		
-		if (*str == '}') {
-			brace--;
-			
-			if (!equals && !brace)
-				MemFile_Printf(hdr, ";");
-		}
-		
-		str++;
-	}
-	
-	StrRep(hdr->str, " ;\n", ";");
-	hdr->size = strlen(hdr->str);
-	
-	FileSys_Path(gOPath);
-	Sys_MakeDir(Path(FileSys_File(file)));
-	MemFile_SaveFile_String(hdr, xRep(FileSys_File(file), ".c", ".h"));
-	
-	ThreadLock_Lock();
-	printf_info("OK: %s", file);
-	ThreadLock_Unlock();
-	
-	MemFile_Free(mem);
-	MemFile_Free(hdr);
-	Free(mem);
-	Free(hdr);
-}
-
 void GenHdr_GenerateHeaders(void) {
 	ItemList* list = New(ItemList);
 	const char* wd = strdup(Sys_WorkDir());
@@ -162,11 +157,11 @@ void GenHdr_GenerateHeaders(void) {
 	ItemList_List(list, "", -1, LIST_FILES);
 	
 	for (u32 i = 0; i < list->num; i++) {
-		if (StrStart(list->item[i], "overlays"))
+		if (StrStr(list->item[i], "/overlays/"))
 			continue;
-		if (StrStart(list->item[i], "gcc_fix"))
+		if (StrStr(list->item[i], "/gcc_fix/"))
 			continue;
-		if (StrStart(list->item[i], "elf_message"))
+		if (StrStr(list->item[i], "/elf_message/"))
 			continue;
 		if (!StrEnd(list->item[i], ".c"))
 			continue;
@@ -177,43 +172,11 @@ void GenHdr_GenerateHeaders(void) {
 	}
 	
 	ThreadLock_Init();
-	ThdPool_Exec(16, true);
+	ThdPool_Exec(1, true);
 	ThreadLock_Free();
 	
 	Sys_SetWorkDir(wd);
 	ItemList_Free(list);
 	Free(wd);
 	Free(list);
-}
-
-int main(int n, char** arg) {
-	u32 i;
-	
-	if (ParseArgs(arg, "i", &i)) {
-		gIPath = qFree(StrDupX(arg[i], 256));
-		
-		if (PathIsRel(gIPath))
-			strcpy(gIPath, PathAbs(gIPath));
-		
-		if (!StrEnd(gIPath, "/"))
-			strcat(gIPath, "/");
-	}
-	
-	if (ParseArgs(arg, "o", &i)) {
-		if (arg[i]) {
-			gOPath = StrDupX(arg[i], 512);
-		} else {
-			gOPath = StrDupX(Sys_WorkDir(), 512);
-		}
-		
-		if (PathIsRel(gOPath))
-			strcpy(gOPath, PathAbs(gOPath));
-		
-		if (!StrEnd(gOPath, "/"))
-			strcat(gOPath, "/");
-	}
-	
-	GenHdr_GenerateHeaders();
-	GenHdr_OpenFiles();
-	GenHdr_ParseZ64Map();
 }

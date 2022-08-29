@@ -26,9 +26,12 @@ default: linux
 all: linux win32
 linux: $(RELEASE_EXECUTABLE_LINUX)
 win32: $(RELEASE_EXECUTABLE_WIN32)
+test: $(RELEASE_EXECUTABLE_LINUX)
+	./$< --i ../oot_decomp_latest/ --o test/ --verbose
 
 clean:
 	rm -rf bin
+	rm -rf test
 	rm -f $(RELEASE_EXECUTABLE_LINUX)
 	rm -f $(RELEASE_EXECUTABLE_WIN32)
 
