@@ -22,7 +22,13 @@ extern bool gVerbose;
 void GenHdr_OpenFiles(void);
 void GenHdr_ParseZ64Map(void);
 void GenHdr_GenerateHeaders(void);
-void GenHdr_CFile(const char* file);
+
+char* Token_Next(const char* str);
+char* Token_Stack(s32 i);
+char* Token_Prev(const char* str);
+char* Token_Copy(const char* str);
+void Token_AllocStack(void);
+void Token_FreeStack(void);
 
 static inline void MSG(const char* fmt, ...) {
 	char* msg;

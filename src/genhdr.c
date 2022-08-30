@@ -149,6 +149,69 @@ void GenHdr_ParseZ64Map(void) {
 	} while ((str = Line(str, 1)));
 }
 
+static void GenHdr_ParseC(const char* file) {
+	MemFile* in = New(MemFile);
+	MemFile* out = New(MemFile);
+	char* s;
+	s32 brace = 0;
+	s32 equals = 0;
+	
+	MemFile_LoadFile_String(in, file);
+	MemFile_Alloc(out, in->size);
+	s = in->str;
+	
+	Token_AllocStack();
+	
+	FileSys_Path(xFmt("%sinclude/", gOPath));
+	MSG("File: %s", xRep(FileSys_File(file), ".c", ".h"));
+	Sys_MakeDir(Path(FileSys_File(file)));
+	
+	do {
+		Log("Token Copy");
+		char* token = Token_Copy(s);
+		
+		Log("%s", token);
+		
+		if (*token == '{')
+			brace++;
+		
+		if (!brace) {
+			
+			if (!strcmp(token, "="))
+				equals++;
+			
+			if (equals)
+				if (*token== ';')
+					equals--;
+			
+			if (!equals)
+				if (MemFile_Write(out, token, strlen(token)) != strlen(token))
+					printf_error("Exit");
+		}
+		
+		if (*token == '}') {
+			brace--;
+			
+			if (!brace)
+				MemFile_Printf(out, ";");
+		}
+		
+		Free(token);
+		Log("Next");
+	} while ((s = Token_Next(s)));
+	
+	StrRep(out->str, " ;", ";");
+	out->size = strlen(out->str);
+	
+	MemFile_SaveFile_String(out, xRep(FileSys_File(file), ".c", ".h"));
+	MemFile_Free(in);
+	MemFile_Free(out);
+	Free(in);
+	Free(out);
+	
+	Token_FreeStack();
+}
+
 void GenHdr_GenerateHeaders(void) {
 	ItemList* list = New(ItemList);
 	const char* wd = strdup(Sys_WorkDir());
@@ -157,18 +220,18 @@ void GenHdr_GenerateHeaders(void) {
 	ItemList_List(list, "", -1, LIST_FILES);
 	
 	for (u32 i = 0; i < list->num; i++) {
-		if (StrStr(list->item[i], "/overlays/"))
+		if (StrStr(list->item[i], "overlays/"))
 			continue;
-		if (StrStr(list->item[i], "/gcc_fix/"))
+		if (StrStr(list->item[i], "gcc_fix/"))
 			continue;
-		if (StrStr(list->item[i], "/elf_message/"))
+		if (StrStr(list->item[i], "elf_message/"))
 			continue;
 		if (!StrEnd(list->item[i], ".c"))
 			continue;
 		if (list->item[i] == NULL)
 			continue;
 		
-		ThdPool_Add(GenHdr_CFile, list->item[i], 0);
+		ThdPool_Add(GenHdr_ParseC, list->item[i], 0);
 	}
 	
 	ThreadLock_Init();
