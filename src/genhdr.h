@@ -13,7 +13,7 @@ extern bool gVerbose;
 #pragma GCC diagnostic ignored "-Wunused-function"
 
 #define FOPEN(filename) ({ \
-		MSG("FOPEN: %s", FileSys_File(filename)); \
+		MSG("%-8s %s", "fopen:", FileSys_File(filename)); \
 		FILE* f = fopen(FileSys_File(filename), "w"); \
 		if (!f) printf_error("Could not fopen file [%s]", filename); \
 		f; \

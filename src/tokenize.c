@@ -15,28 +15,25 @@ static bool chrchr(char c, const char* accept) {
 	return false;
 }
 
-ThreadLocal bool gIsInclude;
-ThreadLocal bool gIsMacro;
-ThreadLocal char gTokenPrev[512];
+ThreadLocal char gTokenPrev[4096];
 ThreadLocal char** gTokenStack;
 
 static s32 TokenStrLen(const char* str) {
 	if (!isgraph(*str))
-		return 1;
+		return strspn(str, xFmt("%c", *str));
 	
 	if (StrStart(str, "//"))
-		return Line(str, 1) - str;
+		return LineLen(str);
 	
 	if (StrStart(str, "/*"))
 		return (char*)(StrStr(str, "*/") + 2) - str;
 	
-	if (StrStart(gTokenPrev, "#include")) {
-		gIsInclude = false;
+	if (StrStart(Token_Stack(1), "#include")) {
 		
 		return strcspn(str, " \n\t\r");
 	}
 	
-	if (StrStart(gTokenPrev, "#define")) {
+	if (StrStart(Token_Stack(1), "#define")) {
 		u32 escape = 0;
 		u32 l = 1;
 		
@@ -49,12 +46,10 @@ static s32 TokenStrLen(const char* str) {
 			l++;
 		}
 		
-		gIsMacro = false;
-		
 		return l;
 	}
 	
-	if (chrchr(*str, "()[]{},.;"))
+	if (chrchr(*str, "()[]{},.;/"))
 		return 1;
 	if (StrStart(str, "<<") || StrStart(str, ">>"))
 		return 2;
@@ -69,13 +64,17 @@ static s32 TokenStrLen(const char* str) {
 		return l + 1;
 	}
 	
-	// Float
-	if (Regex(str, "[0-9]{1,}.[f0-9]{1,}", REGFLAG_START) == str)
-		return Regex(str, "[0-9]{1,}.[f0-9]{1,}", REGFLAG_END) - str;
-	
 	// Hex
 	if (Regex(str, "0x[a-fA-F0-9]{1,}", REGFLAG_START) == str)
 		return Regex(str, "0x[a-fA-F0-9]{1,}", REGFLAG_END) - str;
+	
+	// Bit
+	if (Regex(str, "0b[01]{1,}", REGFLAG_START) == str)
+		return Regex(str, "0x[a-fA-F0-9]{1,}", REGFLAG_END) - str;
+	
+	// Float
+	if (Regex(str, "[0-9]{1,}.[f0-9]{1,}", REGFLAG_START) == str)
+		return Regex(str, "[0-9]{1,}.[f0-9]{1,}", REGFLAG_END) - str;
 	
 	if (isgraph(*str))
 		return strcspn(str, " \t\n\r(){}[];,.+-*/");
@@ -83,29 +82,30 @@ static s32 TokenStrLen(const char* str) {
 	return 0;
 }
 
-char* Token_Next(const char* str) {
-	if (!str) return NULL;
+char* Token_Next(const char* s) {
+	if (!s) return NULL;
 	s32 l;
-	char* z = (char*)str + strlen(str);
+	char* z = (char*)s + strlen(s);
 	
-	if ((l = TokenStrLen(str)) == 0)
-		return NULL;
+	if ((l = TokenStrLen(s)) == 0)
+		printf_error("\aUnknown Token: " PRNT_REDD "\"%.8s\"", s);
 	
-	if (!chrchr(*str, " \t/")) {
-		strncpy((char*)gTokenPrev, str, l);
-		
-		if (gTokenStack) {
+	strncpy((char*)gTokenPrev, s, l);
+	gTokenPrev[l] = '\0';
+	
+	if (gTokenStack) {
+		if (!ChrPool(*gTokenPrev, " \t")) {
 			ArrMoveR(gTokenStack, 0, 32);
 			strcpy(gTokenStack[0], gTokenPrev);
 		}
 	}
 	
-	str += l;
+	s += l;
 	
-	if (str >= z)
+	if (s >= z)
 		return NULL;
 	
-	return (char*)str;
+	return (char*)s;
 }
 
 char* Token_Stack(s32 i) {
@@ -120,6 +120,8 @@ char* Token_Prev(const char* str) {
 }
 
 char* Token_Copy(const char* str) {
+	if (!str) return NULL;
+	
 	return strndup(str, TokenStrLen(str));
 }
 
@@ -128,7 +130,7 @@ void Token_AllocStack(void) {
 		gTokenStack = Calloc(sizeof(char*) * 32);
 		
 		for (s32 i = 0; i < 32; i++)
-			gTokenStack[i] = Alloc(512);
+			gTokenStack[i] = Alloc(4096);
 	}
 }
 

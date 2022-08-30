@@ -59,7 +59,7 @@ void GenHdr_OpenFiles(void) {
 		char* input = list->item[i];
 		char* output = xFmt("%s%s", gOPath, StrStr(input, "include/"));
 		
-		MSG("Copy %s -> %s", input, output);
+		MSG("%-8s %-32s -> %s", "copy:", input + strlen(gIPath), output + strlen(gOPath));
 		Sys_MakeDir(Path(output));
 		Sys_Copy(input, output);
 	}
@@ -149,33 +149,151 @@ void GenHdr_ParseZ64Map(void) {
 	} while ((str = Line(str, 1)));
 }
 
+static bool ValidName(const char* s) {
+	if (s == NULL) return false;
+	if (Regex(s, "[a-zA-Z_][a-zA-Z0-9_]{0,}", REGFLAG_START) == s)
+		return true;
+	
+	return false;
+}
+
 static void GenHdr_ParseC(const char* file) {
 	MemFile* in = New(MemFile);
 	MemFile* out = New(MemFile);
 	char* s;
 	s32 brace = 0;
 	s32 equals = 0;
+	bool typdef = false;
+	
+	Time_Start(0);
 	
 	MemFile_LoadFile_String(in, file);
-	MemFile_Alloc(out, in->size);
+	MemFile_Alloc(out, in->size * 2);
 	s = in->str;
 	
 	Token_AllocStack();
 	
-	FileSys_Path(xFmt("%sinclude/", gOPath));
-	MSG("File: %s", xRep(FileSys_File(file), ".c", ".h"));
-	Sys_MakeDir(Path(FileSys_File(file)));
-	
 	do {
-		Log("Token Copy");
 		char* token = Token_Copy(s);
+		bool newline = *Token_Stack(0) == '\n' ? true : false;
 		
-		Log("%s", token);
+		if (!strcmp(token, "typedef"))
+			typdef = true;
+		
+		if (typdef) {
+			if (*token == '{')
+				brace++;
+			if (*token == '}')
+				brace--;
+			
+			if (!brace && *token == ';')
+				typdef = false;
+			
+			if (MemFile_Write(out, token, strlen(token)) != strlen(token))
+				goto write_error;
+			
+			continue;
+		}
 		
 		if (*token == '{')
 			brace++;
 		
 		if (!brace) {
+			
+			// if (!strcmp(token, "KillTHISnow")) {
+			// 	for (s32 i = 32; i > 0; i--)
+			// 		printf_info("\"%s\"", xRep(Token_Stack(i - 1), "\n", "\\n"));
+			// 	exit(0);
+			// }
+			
+			if (newline) {
+				char* tokens[4] = {
+					s
+				};
+				
+				if (!strcmp(token, "#include")) {
+					char* nt = Token_Copy(Token_Next(Token_Next(s)));
+					
+					if (StrStr(nt, "\"tables/")) {
+						if (!MemFile_Printf(out, "// #include \"tables/...\""))
+							goto write_error;
+						s = Token_Next(Token_Next(s)); // Skip include
+						
+						Free(nt);
+						
+						continue;
+					}
+					
+					if (StrStr(nt, ".c\"")) {
+						if (!MemFile_Printf(out, "#include %s", xRep(nt, ".c\"", ".h\"")))
+							goto write_error;
+						s = Token_Next(Token_Next(s)); // Skip include
+						
+						Free(nt);
+						
+						continue;
+					}
+					
+					Free(nt);
+				}
+				
+				for (s32 i = 1; i < 4; i++) {
+					char* t = Token_Next(tokens[i - 1]);
+					
+					while (t && ChrPool(*t, " \t"))
+						t = Token_Next(t);
+					
+					tokens[i] = t;
+				}
+				
+				for (s32 i = 0; i < 4; i++) {
+					tokens[i] = Token_Copy(tokens[i]);
+					Log("tokens[%d] == %s\"%s\"", i, i == 0 ? PRNT_BLUE : "", tokens[i]);
+				}
+				
+				if (ValidName(tokens[0])) { // Valid type name?
+					
+					if (StrPool(tokens[1], "*")) { // Pointer Variable
+						
+						if (ValidName(tokens[2])) { // Variable Name
+							if (ChrPool(*tokens[3], "[;=")) // Array (un)initialized
+								if (!MemFile_Printf(out, "extern "))
+									goto write_error;
+							
+						} else if (*tokens[2] == '(') // Function Variable
+							if (*tokens[3] == '*')
+								if (!MemFile_Printf(out, "extern "))
+									goto write_error;
+						
+					} else if (ValidName(tokens[1])) { // Data Variable
+						
+						if (ChrPool(*tokens[2], "[;=")) // Array (un)initialized
+							if (!MemFile_Printf(out, "extern "))
+								goto write_error;
+						
+					} else if (!strcmp(tokens[0], "static")) { // Static to Extern
+						
+						for (s32 i = 0; i < 4; i++)
+							Free(tokens[i]);
+						
+						if (!MemFile_Printf(out, "extern "))
+							goto write_error;
+						
+						s = Token_Next(s);
+						
+						continue;
+						
+					} else if (*tokens[1] == '(') // Function Variable
+						
+						if (*tokens[2] == '*')
+							if (!MemFile_Printf(out, "extern "))
+								goto write_error;
+					
+				}
+				
+				for (s32 i = 0; i < 4; i++)
+					Free(tokens[i]);
+			}
 			
 			if (!strcmp(token, "="))
 				equals++;
@@ -186,22 +304,29 @@ static void GenHdr_ParseC(const char* file) {
 			
 			if (!equals)
 				if (MemFile_Write(out, token, strlen(token)) != strlen(token))
-					printf_error("Exit");
+					goto write_error;
 		}
 		
 		if (*token == '}') {
 			brace--;
 			
 			if (!brace)
-				MemFile_Printf(out, ";");
+				if (!MemFile_Printf(out, ";"))
+					goto write_error;
 		}
 		
 		Free(token);
 		Log("Next");
 	} while ((s = Token_Next(s)));
 	
+	StrRep(out->str, ";;", ";");
 	StrRep(out->str, " ;", ";");
+	
 	out->size = strlen(out->str);
+	
+	FileSys_Path(xFmt("%sinclude/", gOPath));
+	MSG("%-8s time: %2.2fs %s", "parse:", Time_Get(0), xRep(FileSys_File(file), ".c", ".h") + strlen(gOPath));
+	Sys_MakeDir(Path(FileSys_File(file)));
 	
 	MemFile_SaveFile_String(out, xRep(FileSys_File(file), ".c", ".h"));
 	MemFile_Free(in);
@@ -210,6 +335,11 @@ static void GenHdr_ParseC(const char* file) {
 	Free(out);
 	
 	Token_FreeStack();
+	
+	return;
+	
+write_error:
+	printf_error("Ran out of space...");
 }
 
 void GenHdr_GenerateHeaders(void) {
@@ -235,7 +365,8 @@ void GenHdr_GenerateHeaders(void) {
 	}
 	
 	ThreadLock_Init();
-	ThdPool_Exec(1, true);
+	ThdPool_Exec(16, true);
+	MSG("OK!");
 	ThreadLock_Free();
 	
 	Sys_SetWorkDir(wd);
