@@ -6,3 +6,4 @@ test/
 settings.mk
 check.sh
 compile_flags.txt
+ExtLib
