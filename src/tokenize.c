@@ -130,7 +130,7 @@ void Token_AllocStack(void) {
 		gTokenStack = Calloc(sizeof(char*) * 32);
 		
 		for (s32 i = 0; i < 32; i++)
-			gTokenStack[i] = Alloc(4096);
+			gTokenStack[i] = Calloc(4096);
 	}
 }
 

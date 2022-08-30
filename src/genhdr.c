@@ -6,8 +6,198 @@ FILE* gF_SrcLD;
 FILE* gF_ObjLD;
 bool gVerbose;
 
+static bool ValidName(const char* s) {
+	if (s == NULL) return false;
+	if (Regex(s, "[a-zA-Z_][a-zA-Z0-9_]{0,}", REGFLAG_START) == s)
+		return true;
+	
+	return false;
+}
+
+static bool ValidHex(const char* s) {
+	if (s == NULL) return false;
+	
+	if (Regex(s, "0x[a-fA-F0-9]{1,}", REGFLAG_START) == s)
+		return true;
+	
+	return false;
+}
+
+typedef enum {
+	MAP_CSV,
+	MAP_JSON,
+	MAP_TOML,
+} MapType;
+
+static void GenerateMap(const char* t) {
+	MapType type;
+	
+	if (!stricmp(t, "csv"))
+		type = MAP_CSV;
+	else if (!stricmp(t, "json"))
+		type = MAP_JSON;
+	else if (!strcmp(t, "toml"))
+		type = MAP_TOML;
+	
+	else
+		type = MAP_TOML;
+	
+	MemFile* ld = New(MemFile);
+	MemFile* a = New(MemFile);
+	MemFile* b = New(MemFile);
+	MemFile* o = New(MemFile);
+	
+	MemFile_LoadFile_String(ld, "test/symbol_src.ld");
+	MemFile_LoadFile_String(a, "ld/oot_mq_debug.ld");
+	MemFile_LoadFile_String(b, "ld/oot_10u.ld");
+	MemFile_Alloc(o, a->size + ld->size + b->size);
+	MemFile_Params(o, MEM_REALLOC, true, MEM_END);
+	
+	char* s = ld->str;
+	char* segment = NULL;
+	char* file = NULL;
+	bool newSegment = false;
+	bool newFile = false;
+	bool firstSegment = true;
+	bool firstFile = true;
+	bool comma = false;
+	
+	switch (type) {
+		case MAP_CSV:
+			MemFile_Printf(o, "segment;file;symbol;oot_mq_debug;oot_10u;mm_u\n");
+			break;
+		case MAP_JSON:
+			MemFile_Printf(o, "{\n");
+			break;
+		case MAP_TOML:
+			MemFile_Printf(o, "# \toot_mq_debug_addr = [\n");
+			MemFile_Printf(o, "# \t\toot_10u_addr\n");
+			MemFile_Printf(o, "# \t\tmm_u_addr\n");
+			MemFile_Printf(o, "# \t]\n\n");
+			break;
+	}
+	
+	Token_AllocStack();
+	do {
+		PostFree_Free();
+		char* token = PostFree_Queue(Token_Copy(s));
+		char* name = NULL;
+		char* address = NULL;
+		char* nadd = NULL;
+		char* symname = NULL;
+		
+		if (StrStart(token, "/*")) {
+			if (s[-1] == '\t') {
+				newFile = true;
+				Free(file);
+				file = strdup(xRep(xRep(token, "/* ", ""), " */", ""));
+			} else {
+				newSegment = true;
+				Free(segment);
+				segment = strdup(xRep(xRep(token, "/* ", ""), " */", ""));
+			}
+			
+			continue;
+		}
+		
+		Log("\"%s\"", xRep(token, "\n", "\\n"));
+		if (!ValidHex(token))
+			continue;
+		if (Value_Hex(token) < 0x80000000)
+			continue;
+		
+		symname = Token_Stack(1);
+		address = token;
+		name = StrStr(a->str, address);
+		
+		if (name) {
+			name = LineHead(name, a->str);
+			nadd = StrStrWhole(b->str, CopyWord(name, 0));
+			
+			for (s32 i = 0; i < 4; i++)
+				nadd = Token_Next(nadd);
+			
+			nadd = PostFree_Queue(Token_Copy(nadd));
+			if (nadd && *nadd == '?')
+				nadd = NULL;
+			
+		}
+		
+		switch (type) {
+			case MAP_CSV:
+				MemFile_Printf(
+					o,
+					"%s;%s.c;%s;%s;%s;%s\n", segment, file, symname, address + 2, nadd ? nadd + 2 : "null", "null"
+				);
+				break;
+			case MAP_JSON:
+				if (newSegment) {
+					if (!firstSegment) {
+						MemFile_Printf(o, "\n\t\t}");
+						MemFile_Printf(o, "\n\t},\n");
+					}
+					MemFile_Printf(o, "\t\"%s\": {\n", segment);
+					firstSegment = false;
+					comma = false;
+					firstFile = true;
+				}
+				if (newFile) {
+					if (!firstFile)
+						MemFile_Printf(o, "\n\t\t},\n");
+					MemFile_Printf(o, "\t\t\"%s\": {\n", file);
+					firstFile = false;
+					comma = false;
+				}
+				
+				if (comma)
+					MemFile_Printf(o, ",\n");
+				
+				MemFile_Printf(o, "\t\t\t%s: {\n", address);
+				MemFile_Printf(o, "\t\t\t\t\"symbol\":  \"%s\"\n", symname);
+				if (nadd)
+					MemFile_Printf(o, "\t\t\t\t\"oot_10u\": %s\n", nadd);
+				else
+					MemFile_Printf(o, "\t\t\t\t\"oot_10u\": %s\n", "null");
+				MemFile_Printf(o, "\t\t\t\t\"mm_u\":    %s\n", "null");
+				MemFile_Printf(o, "\t\t\t}");
+				comma = true;
+				break;
+			case MAP_TOML:
+				if (newFile) MemFile_Printf(o, "[%s.%s]\n", xRep(segment, ".bss", ""), xFmt("%s%s", Basename(file), StrEnd(segment, ".bss") ? ".bss" : ""));
+				MemFile_Printf(o, "\t# %s\n", symname);
+				MemFile_Printf(o, "\t%s = [\n", address + 2);
+				MemFile_Printf(o, "\t\t%s,\n", nadd ? nadd + 2 : "null");
+				MemFile_Printf(o, "\t\t%s,\n\t]\n\n", "null");
+				break;
+		}
+		
+		newFile = newSegment = false;
+		
+	} while ((s = Token_Next(s)));
+	
+	switch (type) {
+		case MAP_CSV:
+			MemFile_SaveFile_String(o, "symmap.csv");
+			break;
+		case MAP_JSON:
+			MemFile_Printf(o, "\t\t}\n");
+			MemFile_Printf(o, "\t}\n");
+			MemFile_Printf(o, "}\n");
+			MemFile_SaveFile_String(o, "symmap.json");
+			break;
+		case MAP_TOML:
+			MemFile_SaveFile_String(o, "symmap.toml");
+			break;
+	}
+	
+	exit(0);
+}
+
 int main(s32 n, char** arg) {
 	u32 i;
+	
+	if (ParseArgs(arg, "map", &i))
+		GenerateMap(arg[i]);
 	
 	Log_NoOutput();
 	
@@ -48,6 +238,31 @@ int main(s32 n, char** arg) {
 	GenHdr_ParseZ64Map();
 }
 
+static void GenHdr_PatchC(void) {
+	MemFile* mem = New(MemFile);
+	
+	FileSys_Path(gOPath);
+	
+	if (!MemFile_LoadFile_String(mem, FileSys_File("include/libc/stddef.h"))) {
+		MemFile_Realloc(mem, mem->size * 4);
+		
+		StrRep(
+			mem->str,
+			"\n\ntypedef unsigned long size_t;",
+			"\n\n#ifndef __clang__\n"
+			"  typedef unsigned long size_t;\n"
+			"#endif"
+		);
+		
+		mem->size = strlen(mem->str);
+		
+		MemFile_SaveFile_String(mem, mem->info.name);
+	}
+	
+	MemFile_Free(mem);
+	Free(mem);
+}
+
 void GenHdr_OpenFiles(void) {
 	ItemList* list = New(ItemList);
 	
@@ -63,6 +278,8 @@ void GenHdr_OpenFiles(void) {
 		Sys_MakeDir(Path(output));
 		Sys_Copy(input, output);
 	}
+	
+	GenHdr_PatchC();
 	
 	FileSys_Path(gOPath);
 	gF_SrcLD = FOPEN("symbol_src.ld");
@@ -138,23 +355,26 @@ void GenHdr_ParseZ64Map(void) {
 		
 		if (queNewTitle) {
 			if (!fst[id]) fprintf(out, "\n");
-			fprintf(out, "/* %s */\n", title);
+			fprintf(out, "/* %s */\n", title + 1);
 		}
-		if (queNewFile) fprintf(out, "\t/* %s */\n", file);
+		if (queNewFile) {
+			char* f = strndup(file, strcspn(file, "("));
+			
+			if (StrStart(f, "build/src/")) {
+				f[strlen(f) - 1] = 'c';
+				fprintf(out, "\t/* %s */\n", f + strlen("build/src/"));
+			}
+			if (StrStart(f, "build/assets/"))
+				fprintf(out, "\t/* %s */\n", f + strlen("build/assets/"));
+			
+			Free(f);
+		}
 		fprintf(out, "\t\t%-32s = 0x%08X;\n", word, addr);
 		
 		queNewTitle = false;
 		queNewFile = false;
 		fst[id] = false;
 	} while ((str = Line(str, 1)));
-}
-
-static bool ValidName(const char* s) {
-	if (s == NULL) return false;
-	if (Regex(s, "[a-zA-Z_][a-zA-Z0-9_]{0,}", REGFLAG_START) == s)
-		return true;
-	
-	return false;
 }
 
 static void GenHdr_ParseC(const char* file) {
@@ -175,9 +395,9 @@ static void GenHdr_ParseC(const char* file) {
 	
 	do {
 		char* token = Token_Copy(s);
-		bool newline = *Token_Stack(0) == '\n' ? true : false;
+		bool newline = (*Token_Stack(0) == '\n' || *Token_Stack(0) == '\0') ? true : false;
 		
-		if (!strcmp(token, "typedef"))
+		if (!strcmp(token, "typedef") || !strcmp(token, "struct"))
 			typdef = true;
 		
 		if (typdef) {
@@ -199,12 +419,6 @@ static void GenHdr_ParseC(const char* file) {
 			brace++;
 		
 		if (!brace) {
-			
-			// if (!strcmp(token, "KillTHISnow")) {
-			// 	for (s32 i = 32; i > 0; i--)
-			// 		printf_info("\"%s\"", xRep(Token_Stack(i - 1), "\n", "\\n"));
-			// 	exit(0);
-			// }
 			
 			if (newline) {
 				char* tokens[4] = {
@@ -253,7 +467,23 @@ static void GenHdr_ParseC(const char* file) {
 				
 				if (ValidName(tokens[0])) { // Valid type name?
 					
-					if (StrPool(tokens[1], "*")) { // Pointer Variable
+					if (!strcmp(tokens[0], "const")) { // const
+						if (!MemFile_Printf(out, "extern "))
+							goto write_error;
+						
+					} else if (!strcmp(tokens[0], "static")) { // Static to Extern
+						
+						for (s32 i = 0; i < 4; i++)
+							Free(tokens[i]);
+						
+						if (!MemFile_Printf(out, "extern "))
+							goto write_error;
+						
+						s = Token_Next(s);
+						
+						continue;
+						
+					} else if (StrPool(tokens[1], "*")) { // Pointer Variable
 						
 						if (ValidName(tokens[2])) { // Variable Name
 							if (ChrPool(*tokens[3], "[;=")) // Array (un)initialized
@@ -271,23 +501,13 @@ static void GenHdr_ParseC(const char* file) {
 							if (!MemFile_Printf(out, "extern "))
 								goto write_error;
 						
-					} else if (!strcmp(tokens[0], "static")) { // Static to Extern
-						
-						for (s32 i = 0; i < 4; i++)
-							Free(tokens[i]);
-						
-						if (!MemFile_Printf(out, "extern "))
-							goto write_error;
-						
-						s = Token_Next(s);
-						
-						continue;
-						
-					} else if (*tokens[1] == '(') // Function Variable
+					} else if (*tokens[1] == '(') { // Function Variable
 						
 						if (*tokens[2] == '*')
 							if (!MemFile_Printf(out, "extern "))
 								goto write_error;
+						
+					}
 					
 				}
 				

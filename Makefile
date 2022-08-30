@@ -31,7 +31,8 @@ test: $(RELEASE_EXECUTABLE_LINUX)
 
 clean:
 	rm -rf bin
-	rm -rf test
+	rm -rf test/include
+	rm -rf test/*.ld
 	rm -f $(RELEASE_EXECUTABLE_LINUX)
 	rm -f $(RELEASE_EXECUTABLE_WIN32)
 
