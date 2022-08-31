@@ -5,6 +5,7 @@ char* gOPath;
 FILE* gF_SrcLD;
 FILE* gF_ObjLD;
 bool gVerbose;
+extern DataFile ggbi;
 
 static bool ValidName(const char* s) {
 	if (s == NULL) return false;
@@ -242,10 +243,9 @@ static void GenHdr_PatchC(void) {
 	MemFile* mem = New(MemFile);
 	
 	FileSys_Path(gOPath);
+	MemFile_Alloc(mem, MbToBin(16));
 	
 	if (!MemFile_LoadFile_String(mem, FileSys_File("include/libc/stddef.h"))) {
-		MemFile_Realloc(mem, mem->size * 4);
-		
 		StrRep(
 			mem->str,
 			"\n\ntypedef unsigned long size_t;",
@@ -259,26 +259,114 @@ static void GenHdr_PatchC(void) {
 		MemFile_SaveFile_String(mem, mem->info.name);
 	}
 	
+	if (!MemFile_LoadFile_String(mem, FileSys_File("include/ultra64/mbi.h"))) {
+		StrRep(
+			mem->str,
+			"#define G_ON",
+			"// #define G_ON"
+		);
+		StrRep(
+			mem->str,
+			"#define G_OFF",
+			"// #define G_OFF"
+		);
+		
+		mem->size = strlen(mem->str);
+		
+		MemFile_SaveFile_String(mem, mem->info.name);
+	}
+	
+	if (!MemFile_LoadFile_String(mem, FileSys_File("include/z64.h"))) {
+		StrRep(
+			mem->str,
+			"#include \"ultra64/gs2dex.h\"",
+			"// #include \"ultra64/gs2dex.h\""
+		);
+		
+		mem->size = strlen(mem->str);
+		
+		MemFile_SaveFile_String(mem, mem->info.name);
+	}
+	
+	if (!MemFile_LoadFile_String(mem, FileSys_File("include/z64actor.h"))) {
+		StrRep(
+			mem->str,
+			"    /* 0x13C */ char dbgPad[0x10]; // Padding that only exists in the debug rom",
+			"#ifdef OOT_DEBUG\n"
+			"    /* 0x13C */ char dbgPad[0x10]; // Padding that only exists in the debug rom\n"
+			"#endif"
+		);
+		
+		mem->size = strlen(mem->str);
+		
+		MemFile_SaveFile_String(mem, mem->info.name);
+	}
+	
 	MemFile_Free(mem);
 	Free(mem);
 }
 
-void GenHdr_OpenFiles(void) {
+static void GenHdr_CopyFiles(void) {
 	ItemList* list = New(ItemList);
 	
-	Sys_MakeDir(gOPath);
-	
 	ItemList_List(list, xFmt("%sinclude/", gIPath), -1, LIST_FILES);
-	
 	for (s32 i = 0; i < list->num; i++) {
 		char* input = list->item[i];
 		char* output = xFmt("%s%s", gOPath, StrStr(input, "include/"));
+		
+		if (StrEnd(list->item[i], "gbi.h")) {
+			MemFile* mem = New(MemFile);
+			
+			MemFile_LoadMem(mem, ggbi.data, ggbi.size);
+			MemFile_SaveFile(mem, output);
+			MSG("%-8s %-32s -> %s", "copy:", "gbi.h", output + strlen(gOPath));
+			
+			Free(mem);
+			
+			continue;
+		}
 		
 		MSG("%-8s %-32s -> %s", "copy:", input + strlen(gIPath), output + strlen(gOPath));
 		Sys_MakeDir(Path(output));
 		Sys_Copy(input, output);
 	}
+	ItemList_Free(list);
 	
+	ItemList_List(list, xFmt("%sassets/", gIPath), -1, LIST_FILES);
+	for (s32 i = 0; i < list->num; i++) {
+		if (!StrEnd(list->item[i], ".h"))
+			continue;
+		
+		char* input = list->item[i];
+		char* output = xFmt("%sinclude/%s", gOPath, StrStr(input, "assets/"));
+		
+		MSG("%-8s %-32s -> %s", "copy:", input + strlen(gIPath), output + strlen(gOPath));
+		Sys_MakeDir(Path(output));
+		Sys_Copy(input, output);
+	}
+	ItemList_Free(list);
+	
+	ItemList_List(list, xFmt("%ssrc/overlays/actors/", gIPath), -1, LIST_FILES);
+	for (s32 i = 0; i < list->num; i++) {
+		if (!StrEnd(list->item[i], ".h"))
+			continue;
+		
+		char* input = list->item[i];
+		char* output = xFmt("%sinclude/%s", gOPath, StrStr(input, "overlays/actors/"));
+		
+		MSG("%-8s %-32s -> %s", "copy:", input + strlen(gIPath), output + strlen(gOPath));
+		Sys_MakeDir(Path(output));
+		Sys_Copy(input, output);
+	}
+	ItemList_Free(list);
+	
+	Free(list);
+}
+
+void GenHdr_OpenFiles(void) {
+	Sys_MakeDir(gOPath);
+	
+	GenHdr_CopyFiles();
 	GenHdr_PatchC();
 	
 	FileSys_Path(gOPath);

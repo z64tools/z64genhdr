@@ -3,8 +3,9 @@ include setup.mk
 CFLAGS          = -Ofast -Wall -Wno-switch -DEXTLIB=210 -DNDEBUG -I src/
 LDFLAGS        := -lm -pthread
 SOURCE_C        = $(shell find src/* -type f -name '*.c')
-SOURCE_O_LINUX := $(foreach f,$(SOURCE_C:.c=.o),bin/linux/$f)
-SOURCE_O_WIN32 := $(foreach f,$(SOURCE_C:.c=.o),bin/win32/$f)
+SOURCE_DATA    := $(shell find datafiles/* -type f)
+SOURCE_O_LINUX := $(foreach f,$(SOURCE_C:.c=.o),bin/linux/$f) $(foreach f,$(SOURCE_DATA:%=%.data.o),bin/linux/$f)
+SOURCE_O_WIN32 := $(foreach f,$(SOURCE_C:.c=.o),bin/win32/$f) $(foreach f,$(SOURCE_DATA:%=%.data.o),bin/win32/$f)
 
 RELEASE_EXECUTABLE_LINUX := app_linux/genhdr
 RELEASE_EXECUTABLE_WIN32 := app_win32/genhdr.exe
@@ -44,6 +45,10 @@ include $(PATH_EXTLIB)ext_lib.mk
 
 -include $(SOURCE_O_LINUX:.o=.d)
 
+bin/linux/%.data.o: %
+	@echo "$(PRNT_RSET)[$(PRNT_GREN)g$(ASSET_FILENAME)$(PRNT_RSET)]"
+	$(DataFileCompiler) --cc gcc --i $< --o $@
+
 bin/linux/%.o: %.c
 	@echo "$(PRNT_RSET)[$(PRNT_PRPL)$(notdir $@)$(PRNT_RSET)]"
 	@gcc -c -o $@ $< $(LDFLAGS) $(CFLAGS)
@@ -58,6 +63,10 @@ $(RELEASE_EXECUTABLE_LINUX): $(SOURCE_O_LINUX) $(ExtLib_Linux_O)
 # # # # # # # # # # # # # # # # # # # #
 
 -include $(SOURCE_O_WIN32:.o=.d)
+
+bin/win32/%.data.o: %
+	@echo "$(PRNT_RSET)[$(PRNT_GREN)g$(ASSET_FILENAME)$(PRNT_RSET)]"
+	$(DataFileCompiler) --cc i686-w64-mingw32.static-gcc --i $< --o $@
 
 bin/win32/%.o: %.c
 	@echo "$(PRNT_RSET)[$(PRNT_PRPL)$(notdir $@)$(PRNT_RSET)]"
