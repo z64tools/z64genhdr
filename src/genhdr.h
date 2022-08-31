@@ -14,6 +14,7 @@ extern bool gVerbose;
 
 #define FOPEN(filename) ({ \
 		MSG("%-8s %s", "fopen:", FileSys_File(filename)); \
+		Sys_MakeDir(Path(FileSys_File(filename))); \
 		FILE* f = fopen(FileSys_File(filename), "w"); \
 		if (!f) printf_error("Could not fopen file [%s]", filename); \
 		f; \
@@ -22,6 +23,7 @@ extern bool gVerbose;
 void GenHdr_OpenFiles(void);
 void GenHdr_ParseZ64Map(void);
 void GenHdr_GenerateHeaders(void);
+void GenHdr_PatchC(void);
 
 char* Token_Next(const char* str);
 char* Token_Stack(s32 i);
