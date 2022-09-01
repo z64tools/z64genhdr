@@ -5,6 +5,7 @@ char* gOPath;
 FILE* gF_SrcLD;
 FILE* gF_ObjLD;
 FILE* gF_ScnLD;
+FILE* gF_OtherLD;
 bool gVerbose;
 extern DataFile gGbiH;
 extern DataFile gZ64ActorLD;
@@ -106,13 +107,13 @@ static void GenHdr_CopyFiles(void) {
 	}
 	ItemList_Free(list);
 	
-	ItemList_List(list, xFmt("%ssrc/overlays/actors/", gIPath), -1, LIST_FILES);
+	ItemList_List(list, xFmt("%ssrc/overlays/", gIPath), -1, LIST_FILES);
 	for (s32 i = 0; i < list->num; i++) {
 		if (!StrEnd(list->item[i], ".h"))
 			continue;
 		
 		char* input = list->item[i];
-		char* output = xFmt("%sinclude/%s", gOPath, StrStr(input, "overlays/actors/"));
+		char* output = xFmt("%sinclude/%s", gOPath, StrStr(input, "overlays/"));
 		
 		MSG("%-8s %-32s -> %s", "copy:", input + strlen(gIPath), output + strlen(gOPath));
 		Sys_MakeDir(Path(output));
@@ -126,8 +127,14 @@ static void GenHdr_CopyFiles(void) {
 const char* gHeaderText[] = {
 	"#ifndef Z64HDR_H\n"
 	"#define Z64HDR_H\n"
-	"\n",
+	"\n"
+	"#define F3DEX_GBI_2\n"
+	"#define GS2DEX_H\n\n",
 	"\n\n"
+	"#ifndef GLOBAL_H\n"
+	"  #include \"ultra64.h\"\n"
+	"  #include \"global.h\"\n"
+	"#endif\n\n"
 	"extern struct GraphicsContext* __gfxCtx;\n"
 	"\n"
 	"#endif"
@@ -153,6 +160,7 @@ void GenHdr_OpenFiles(void) {
 	gF_SrcLD = FOPEN("oot_mq_debug/sym_src.ld");
 	gF_ObjLD = FOPEN("oot_mq_debug/sym_obj.ld");
 	gF_ScnLD = FOPEN("oot_mq_debug/sym_scn.ld");
+	gF_OtherLD = FOPEN("oot_mq_debug/sym_other.ld");
 	
 	symscript = FOPEN("oot_mq_debug/syms.ld");
 	z64hdr_ld = FOPEN("oot_mq_debug/z64hdr.ld");
@@ -182,10 +190,12 @@ void GenHdr_ParseZ64Map(void) {
 	char* title = strdup("none");
 	char* file = strdup("none");
 	u32 id = 0;
-	bool fst[3] = { true, true, true };
-	FILE* out[3] = { gF_SrcLD, gF_ScnLD, gF_ObjLD };
-	bool newTitle = false, newFile = false;
-	bool queNewFile = false, queNewTitle = false;
+	bool fst[] = { true, true, true, true };
+	FILE* out[] = { gF_SrcLD, gF_ScnLD, gF_ObjLD, gF_OtherLD };
+	s8 newTitle[4] = {};
+	s8 newFile[4] = {};
+	s8 queNewFile[4] = {};
+	s8 queNewTitle[4] = {};
 	
 	FileSys_Path(gIPath);
 	if (MemFile_LoadFile_String(mem, FileSys_File("build/z64.map")))
@@ -197,21 +207,24 @@ void GenHdr_ParseZ64Map(void) {
 		u32 addr = 0;
 		char* word = NULL;
 		
-		newFile = newTitle = false;
+		memset(newFile, 0, sizeof(newFile));
+		memset(newTitle, 0, sizeof(newTitle));
 		if (*str == '\0')
 			break;
 		if (StrStart(str, ".")) {
 			Free(title);
 			title = strdup(CopyWord(str + 1, 0));
-			newTitle = queNewTitle = true;
+			memset(newTitle, 1, sizeof(newTitle));
+			memset(queNewTitle, 1, sizeof(queNewTitle));
 		}
 		if (StrStart(str, " build/")) {
 			Free(file);
 			file = strdup(CopyWord(str, 0));
-			newFile = queNewFile = true;
+			memset(newFile, 1, sizeof(newFile));
+			memset(queNewFile, 1, sizeof(queNewFile));
 		}
 		
-		if (newFile || newTitle)
+		if (memcmp(newFile, "\0\0\0\0", 4) || memcmp(newTitle, "\0\0\0\0", 4))
 			continue;
 		if (StrStart(str, " ."))
 			continue;
@@ -242,7 +255,8 @@ void GenHdr_ParseZ64Map(void) {
 		
 		if (*word == '.' || *word == '*')
 			continue;
-		if (Value_ValidateHex(word))
+		
+		if (Value_ValidateHex(word) && *word != 'D')
 			continue;
 		
 		if (StrStart(file, "build/src")) {
@@ -259,13 +273,18 @@ void GenHdr_ParseZ64Map(void) {
 					continue;
 			
 			id = 2;
-		} else continue;
+		} else {
+			if (StrStr(title, "nu."))
+				continue;
+			
+			id = 3;
+		}
 		
-		if (queNewTitle || fst[id]) {
+		if (queNewTitle[id] || fst[id]) {
 			if (!fst[id]) fprintf(out[id], "\n");
 			fprintf(out[id], "/* %s */\n", title + 1);
 		}
-		if (queNewFile || fst[id]) {
+		if (queNewFile[id] || fst[id]) {
 			char* f = xStrNDup(file, strcspn(file, "("));
 			
 			if (StrStart(f, "build/src/")) {
@@ -277,8 +296,8 @@ void GenHdr_ParseZ64Map(void) {
 		}
 		fprintf(out[id], "\t\t%-32s = 0x%08X;\n", word, addr);
 		
-		queNewTitle = false;
-		queNewFile = false;
+		queNewTitle[id] = false;
+		queNewFile[id] = false;
 		fst[id] = false;
 	} while ((str = Line(str, 1)));
 	
@@ -295,12 +314,18 @@ static void GenHdr_ParseC(const char* file) {
 	s32 brace = 0;
 	s32 equals = 0;
 	bool typdef = false;
+	char* headguard;
 	
 	Time_Start(0);
 	
 	MemFile_LoadFile_String(in, file);
-	MemFile_Alloc(out, in->size * 2);
+	MemFile_Alloc(out, MbToBin(4));
 	s = in->str;
+	
+	headguard = xFmt("Z64_%s_H", xRep(Basename(file), "z_", ""));
+	CaseToUp(headguard, strlen(headguard));
+	MemFile_Printf(out, "#ifndef %s\n", headguard);
+	MemFile_Printf(out, "#define %s\n\n", headguard);
 	
 	Token_AllocStack();
 	
@@ -450,6 +475,8 @@ static void GenHdr_ParseC(const char* file) {
 		Log("Next");
 	} while ((s = Token_Next(s)));
 	
+	MemFile_Printf(out, "\n#endif\n");
+	
 	StrRep(out->str, ";;", ";");
 	StrRep(out->str, " ;", ";");
 	
@@ -518,17 +545,6 @@ Patch gPatch_stddef = {
 	"#endif"
 };
 
-Patch gPatch_mbi[] = {
-	{
-		"G_ON",
-		"// #define G_ON    (1)"
-	},
-	{
-		"G_OFF",
-		"// #define G_OFF   (0)"
-	}
-};
-
 Patch gPatch_z64_h[] = {
 	{
 		"ultra64/gs2dex.h",
@@ -585,21 +601,30 @@ Patch gPatch_functions[] = {
 	{
 		"DmaMgr_SendRequest2",
 		"s32 DmaMgr_SendRequest2(DmaRequest* req, u32 ram, u32 vrom, u32 size, u32 unk5, OSMesgQueue* queue, OSMesg msg"
-	},
-	{
+	},{
 		"    const char* file, s32 line);",
 		"#ifdef OOT_MQ_DEBUG_PAL\n"
 		"  , const char* file, s32 line\n"
 		"#endif\n"
 		");"
-	},
-	{
+	},{
 		"DmaMgr_SendRequest1",
 		"s32 DmaMgr_SendRequest1(void* ram0, u32 vrom, u32 size\n"
 		"#ifdef OOT_MQ_DEBUG_PAL\n"
 		"  , const char* file, s32 line\n"
 		"#endif\n"
 		");"
+	},{
+		"f32 fabsf(f32 f);",
+		"#ifdef OOT_MQ_DEBUG_PAL\n"
+		"f32 fabsf(f32 f);\n"
+		"f32 sqrtf(f32 f);\n"
+		"f64 sqrt(f64 f);\n"
+		"#else"
+	},{
+		"#pragma intrinsic(sqrt)",
+		"#pragma intrinsic(sqrt)\n"
+		"#endif"
 	}
 };
 
@@ -612,17 +637,6 @@ void GenHdr_PatchC(void) {
 	if (!MemFile_LoadFile_String(mem, FileSys_File("include/libc/stddef.h"))) {
 		char* line = CopyLine(LineHead(StrStr(mem->str, gPatch_stddef.src), mem->str), 0);
 		StrRep(mem->str, line, gPatch_stddef.rep);
-		
-		mem->size = strlen(mem->str);
-		
-		MemFile_SaveFile_String(mem, mem->info.name);
-	}
-	
-	if (!MemFile_LoadFile_String(mem, FileSys_File("include/ultra64/mbi.h"))) {
-		for (s32 i = 0; i < ArrayCount(gPatch_mbi); i++) {
-			char* line = CopyLine(LineHead(StrStr(mem->str, gPatch_mbi[i].src), mem->str), 0);
-			StrRep(mem->str, line, gPatch_mbi[i].rep);
-		}
 		
 		mem->size = strlen(mem->str);
 		
@@ -654,6 +668,7 @@ void GenHdr_PatchC(void) {
 	if (!MemFile_LoadFile_String(mem, FileSys_File("include/functions.h"))) {
 		for (s32 i = 0; i < ArrayCount(gPatch_functions); i++) {
 			char* line = CopyLine(LineHead(StrStr(mem->str, gPatch_functions[i].src), mem->str), 0);
+			
 			StrRep(mem->str, line, gPatch_functions[i].rep);
 		}
 		
@@ -665,7 +680,9 @@ void GenHdr_PatchC(void) {
 	if (!MemFile_LoadFile_String(mem, FileSys_File("include/boot/z_std_dma.h"))) {
 		for (s32 i = 0; i < ArrayCount(gPatch_functions); i++) {
 			char* line = CopyLine(LineHead(StrStr(mem->str, gPatch_functions[i].src), mem->str), 0);
-			StrRep(mem->str, line, gPatch_functions[i].rep);
+			
+			if (line)
+				StrRep(mem->str, line, gPatch_functions[i].rep);
 		}
 		
 		mem->size = strlen(mem->str);
