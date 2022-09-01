@@ -6,8 +6,10 @@ FILE* gF_SrcLD;
 FILE* gF_ObjLD;
 FILE* gF_ScnLD;
 bool gVerbose;
-extern DataFile gGbi;
-extern DataFile gActorLinkerScript;
+extern DataFile gGbiH;
+extern DataFile gZ64ActorLD;
+extern DataFile gZ64HdrLD;
+extern DataFile gSymsLD;
 
 static bool ValidName(const char* s) {
 	if (s == NULL) return false;
@@ -75,7 +77,7 @@ static void GenHdr_CopyFiles(void) {
 		if (StrEnd(list->item[i], "gbi.h")) {
 			MemFile* mem = New(MemFile);
 			
-			MemFile_LoadMem(mem, gGbi.data, gGbi.size);
+			MemFile_LoadMem(mem, gGbiH.data, gGbiH.size);
 			MemFile_SaveFile(mem, output);
 			MSG("%-8s %-32s -> %s", "copy:", "gbi.h", output + strlen(gOPath));
 			
@@ -121,24 +123,57 @@ static void GenHdr_CopyFiles(void) {
 	Free(list);
 }
 
+const char* gHeaderText[] = {
+	"#ifndef Z64HDR_H\n"
+	"#define Z64HDR_H\n"
+	"\n",
+	"\n\n"
+	"extern struct GraphicsContext* __gfxCtx;\n"
+	"\n"
+	"#endif"
+};
+
+const char* gPathAndDefine[][2] = {
+	{ "oot_mq_debug/z64hdr.h", "#define OOT_MQ_DEBUG_PAL" },
+	{ "oot_u10/z64hdr.h",      "#define OOT_U10"          },
+	{ "mm_u10/z64hdr.h",       "#define MM_U10"           },
+};
+
 void GenHdr_OpenFiles(void) {
 	FILE* ldscript;
+	FILE* z64hdr_ld;
+	FILE* symscript;
+	FILE* header;
 	
 	Sys_MakeDir(gOPath);
 	
 	GenHdr_CopyFiles();
 	
 	FileSys_Path(gOPath);
-	gF_SrcLD = FOPEN("linker/oot_mq_dbg_pal/sym_src.ld");
-	gF_ObjLD = FOPEN("linker/oot_mq_dbg_pal/sym_obj.ld");
-	gF_ScnLD = FOPEN("linker/oot_mq_dbg_pal/sym_scn.ld");
-	ldscript = FOPEN("linker/actor.ld");
+	gF_SrcLD = FOPEN("oot_mq_debug/sym_src.ld");
+	gF_ObjLD = FOPEN("oot_mq_debug/sym_obj.ld");
+	gF_ScnLD = FOPEN("oot_mq_debug/sym_scn.ld");
 	
-	if (!ldscript)
-		printf_error("ErrorABC (search this, I'm lazy)");
+	symscript = FOPEN("oot_mq_debug/syms.ld");
+	z64hdr_ld = FOPEN("oot_mq_debug/z64hdr.ld");
+	ldscript = FOPEN("common/z64hdr_actor.ld");
 	
-	fwrite(gActorLinkerScript.data, 1, gActorLinkerScript.size, ldscript);
+	fwrite(gSymsLD.data, 1, gSymsLD.size, symscript);
+	fwrite(gZ64HdrLD.data, 1, gZ64HdrLD.size, z64hdr_ld);
+	fwrite(gZ64ActorLD.data, 1, gZ64ActorLD.size, ldscript);
+	fclose(symscript);
+	fclose(z64hdr_ld);
 	fclose(ldscript);
+	
+	for (s32 i = 0; i < ArrayCount(gPathAndDefine); i++) {
+		header = FOPEN(gPathAndDefine[i][0]);
+		
+		fprintf(header, "%s", gHeaderText[0]);
+		fprintf(header, "%s", gPathAndDefine[i][1]);
+		fprintf(header, "%s", gHeaderText[1]);
+		
+		fclose(header);
+	}
 }
 
 void GenHdr_ParseZ64Map(void) {
@@ -148,9 +183,9 @@ void GenHdr_ParseZ64Map(void) {
 	char* file = strdup("none");
 	u32 id = 0;
 	bool fst[3] = { true, true, true };
+	FILE* out[3] = { gF_SrcLD, gF_ScnLD, gF_ObjLD };
 	bool newTitle = false, newFile = false;
 	bool queNewFile = false, queNewTitle = false;
-	FILE* out = NULL;
 	
 	FileSys_Path(gIPath);
 	if (MemFile_LoadFile_String(mem, FileSys_File("build/z64.map")))
@@ -184,7 +219,28 @@ void GenHdr_ParseZ64Map(void) {
 		addr = Value_Hex(CopyWord(str, 0));
 		word = CopyWord(str, 1);
 		
-		if (*word == '_' || *word == '.' || *word == '*')
+		if (!strcmp(word, "_RomSize"))
+			continue;
+		if (StrStart(word, "_")) {
+			if (StrStr(word, "SegmentText"))
+				continue;
+			if (StrStr(word, "SegmentBss"))
+				continue;
+			if (StrStr(word, "SegmentRoData"))
+				continue;
+			if (StrStr(word, "SegmentSData"))
+				continue;
+			if (StrStr(word, "SegmentOvl"))
+				continue;
+			if (StrStr(word, "SegmentOvl"))
+				continue;
+			if (StrStr(word, "StartTemp"))
+				continue;
+			if (StrStr(word, "EndTemp"))
+				continue;
+		}
+		
+		if (*word == '.' || *word == '*')
 			continue;
 		if (Value_ValidateHex(word))
 			continue;
@@ -193,36 +249,33 @@ void GenHdr_ParseZ64Map(void) {
 			if (StrStart(file, "build/src/overlays"))
 				continue;
 			
-			out = gF_SrcLD;
 			id = 0;
 		} else if (StrStart(file, "build/assets/scenes")) {
 			
-			out = gF_ScnLD;
 			id = 1;
 		} else if (StrStart(file, "build/assets")) {
 			if (StrStart(title, ".link_anime"))
 				if (StrStr(word, "possiblePadding"))
 					continue;
 			
-			out = gF_ObjLD;
 			id = 2;
 		} else continue;
 		
 		if (queNewTitle || fst[id]) {
-			if (!fst[id]) fprintf(out, "\n");
-			fprintf(out, "/* %s */\n", title + 1);
+			if (!fst[id]) fprintf(out[id], "\n");
+			fprintf(out[id], "/* %s */\n", title + 1);
 		}
 		if (queNewFile || fst[id]) {
 			char* f = xStrNDup(file, strcspn(file, "("));
 			
 			if (StrStart(f, "build/src/")) {
 				f[strlen(f) - 1] = 'c';
-				fprintf(out, "\t/* %s */\n", f + strlen("build/src/"));
+				fprintf(out[id], "\t/* %s */\n", f + strlen("build/src/"));
 			}
 			if (StrStart(f, "build/assets/"))
-				fprintf(out, "\t/* %s */\n", f + strlen("build/assets/"));
+				fprintf(out[id], "\t/* %s */\n", f + strlen("build/assets/"));
 		}
-		fprintf(out, "\t\t%-32s = 0x%08X;\n", word, addr);
+		fprintf(out[id], "\t\t%-32s = 0x%08X;\n", word, addr);
 		
 		queNewTitle = false;
 		queNewFile = false;
@@ -476,9 +529,15 @@ Patch gPatch_mbi[] = {
 	}
 };
 
-Patch gPatch_z64_h = {
-	"ultra64/gs2dex.h",
-	"// #include \"ultra64/gs2dex.h\""
+Patch gPatch_z64_h[] = {
+	{
+		"ultra64/gs2dex.h",
+		"// #include \"ultra64/gs2dex.h\""
+	},{
+		"ultra64.h",
+		"#include \"z64hdr.h\"\n"
+		"#include \"ultra64.h\""
+	}
 };
 
 Patch gPatch_z64actor[] = {
@@ -571,8 +630,10 @@ void GenHdr_PatchC(void) {
 	}
 	
 	if (!MemFile_LoadFile_String(mem, FileSys_File("include/z64.h"))) {
-		char* line = CopyLine(LineHead(StrStr(mem->str, gPatch_z64_h.src), mem->str), 0);
-		StrRep(mem->str, line, gPatch_z64_h.rep);
+		for (s32 i = 0; i < ArrayCount(gPatch_z64_h); i++) {
+			char* line = CopyLine(LineHead(StrStr(mem->str, gPatch_z64_h[i].src), mem->str), 0);
+			StrRep(mem->str, line, gPatch_z64_h[i].rep);
+		}
 		
 		mem->size = strlen(mem->str);
 		
