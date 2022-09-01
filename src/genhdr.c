@@ -196,6 +196,8 @@ void GenHdr_ParseZ64Map(void) {
 	s8 newFile[4] = {};
 	s8 queNewFile[4] = {};
 	s8 queNewTitle[4] = {};
+	u32 loadAddr = 0;
+	u32 ram = 0;
 	
 	FileSys_Path(gIPath);
 	if (MemFile_LoadFile_String(mem, FileSys_File("build/z64.map")))
@@ -206,6 +208,17 @@ void GenHdr_ParseZ64Map(void) {
 	do {
 		u32 addr = 0;
 		char* word = NULL;
+		char* line = CopyLine(str, 0);
+		
+		if (StrStr(line, "load address")) {
+			char* s = line;
+			
+			while (memcmp(s, "0x00000000", 10))
+				s++;
+			
+			ram = Value_Hex(CopyWord(s, 0));
+			loadAddr = Value_Hex(CopyWord(s, 4));
+		}
 		
 		memset(newFile, 0, sizeof(newFile));
 		memset(newTitle, 0, sizeof(newTitle));
@@ -294,7 +307,7 @@ void GenHdr_ParseZ64Map(void) {
 			if (StrStart(f, "build/assets/"))
 				fprintf(out[id], "\t/* %s */\n", f + strlen("build/assets/"));
 		}
-		fprintf(out[id], "\t\t%-32s = 0x%08X;\n", word, addr);
+		fprintf(out[id], "\t\t%-32s = 0x%08X; /* ROM:0x%08X */\n", word, addr, addr - ram + loadAddr);
 		
 		queNewTitle[id] = false;
 		queNewFile[id] = false;
