@@ -43,9 +43,9 @@ static inline void MSG(const char* fmt, ...) {
 	vasprintf(&msg, fmt, va);
 	va_end(va);
 	
-	ThreadLock_Lock();
+	Mutex_Lock();
 	printf_info("%s", msg);
-	ThreadLock_Unlock();
+	Mutex_Unlock();
 	Free(msg);
 }
 
