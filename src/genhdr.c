@@ -140,7 +140,7 @@ const char* gHeaderText[] = {
     "  #include \"global.h\"\n"
     "#endif\n\n"
     "extern struct GraphicsContext* __gfxCtx;\n"
-    "asm(__gfxCtx = 0x80212020;);\n"
+    "asm(\"__gfxCtx = 0x80212020;\");\n"
     "\n"
     "#endif"
 };
