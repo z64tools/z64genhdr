@@ -654,6 +654,17 @@ Patch gPatch_functions[] = {
     }
 };
 
+Patch gPatch_ultra64[] = {
+    {
+        "#define ULTRA64_H"
+        ,
+        "#define ULTRA64_H\n"
+        "\n"
+        "#define F3DEX_GBI_2\n"
+        "#define GS2DEX_H"
+    }
+};
+
 void GenHdr_PatchC(void) {
     MemFile* mem = New(MemFile);
     
@@ -709,6 +720,19 @@ void GenHdr_PatchC(void) {
             
             if (line)
                 StrRep(mem->str, line, gPatch_functions[i].rep);
+        }
+        
+        mem->size = strlen(mem->str);
+        
+        MemFile_SaveFile_String(mem, mem->info.name);
+    }
+    
+    if (!MemFile_LoadFile_String(mem, FileSys_File("include/ultra64.h"))) {
+        for (s32 i = 0; i < ArrayCount(gPatch_ultra64); i++) {
+            char* line = CopyLine(LineHead(StrStr(mem->str, gPatch_ultra64[i].src), mem->str), 0);
+            
+            if (line)
+                StrRep(mem->str, line, gPatch_ultra64[i].rep);
         }
         
         mem->size = strlen(mem->str);
